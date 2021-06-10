@@ -1,7 +1,7 @@
 
-# SDDC example
+# ESP32 SDDC example template
 
-EdgerOS SDDC example for ESP32.
+EdgerOS SDDC example template for ESP32.
 
 ## Hardware Required
 
@@ -13,11 +13,7 @@ This example can be run on any commonly available ESP32 development board.
 idf.py menuconfig
 ```
 
-Set following parameter under Serial Flasher Options:
-
-* Set `Default serial port`.
-
-Set following parameters under Example Configuration Options:
+Set following parameters under Example Connnection Configuration Options:
 
 * Set `WiFi SSID` of the Spirit (Access-Point).
 
