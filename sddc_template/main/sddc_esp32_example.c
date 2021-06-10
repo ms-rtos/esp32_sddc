@@ -272,7 +272,6 @@ static void event_handle(void* arg, esp_event_base_t event_base,
 static void initialise_wifi(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
-    wifi_event_group = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
     assert(sta_netif);
@@ -419,6 +418,7 @@ void app_main(void)
      */
     ESP_ERROR_CHECK(example_connect());
 
+    wifi_event_group = xEventGroupCreate();
     xTaskCreate(flash_key_task,    "flash_key_task",    4096, NULL, 5, NULL);
     xTaskCreate(sddc_example_task, "sddc_example_task", 4096, NULL, 5, NULL);
 }
