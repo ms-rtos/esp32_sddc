@@ -38,7 +38,6 @@ static EventGroupHandle_t wifi_event_group;
 static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
 static const char *TAG = "sc";
-static int smartconfig_flag = 0;
 
 /*
  * handle MESSAGE
@@ -46,14 +45,19 @@ static int smartconfig_flag = 0;
 static sddc_bool_t esp_on_message(sddc_t *sddc, const uint8_t *uid, const char *message, size_t len)
 {
     cJSON *root = cJSON_Parse(message);
+    sddc_return_value_if_fail(root, SDDC_TRUE);
 
     /*
      * Parse here
      */
 
     char *str = cJSON_Print(root);
+    sddc_goto_error_if_fail(str);
+
     sddc_printf("esp_on_message: %s\n", str);
     cJSON_free(str);
+
+error:
     cJSON_Delete(root);
 
     return SDDC_TRUE;
@@ -86,24 +90,28 @@ static void esp_on_edgeros_lost(sddc_t *sddc, const uint8_t *uid)
 static sddc_bool_t esp_on_update(sddc_t *sddc, const uint8_t *uid, const char *udpate_data, size_t len)
 {
     cJSON *root = cJSON_Parse(udpate_data);
+    char *str;
 
-    if (root) {
-        /*
-         * Parse here
-         */
+    sddc_return_value_if_fail(root, SDDC_FALSE);
 
-        char *str = cJSON_Print(root);
+    /*
+     * Parse here
+     */
 
-        sddc_printf("esp_on_update: %s\n", str);
+    str = cJSON_Print(root);
+    sddc_goto_error_if_fail(str);
 
-        cJSON_free(str);
+    sddc_printf("esp_on_update: %s\n", str);
+    cJSON_free(str);
 
-        cJSON_Delete(root);
+    cJSON_Delete(root);
 
-        return SDDC_TRUE;
-    } else {
-        return SDDC_FALSE;
-    }
+    return SDDC_TRUE;
+
+error:
+    cJSON_Delete(root);
+
+    return SDDC_FALSE;
 }
 
 /*
@@ -112,24 +120,28 @@ static sddc_bool_t esp_on_update(sddc_t *sddc, const uint8_t *uid, const char *u
 static sddc_bool_t esp_on_invite(sddc_t *sddc, const uint8_t *uid, const char *invite_data, size_t len)
 {
     cJSON *root = cJSON_Parse(invite_data);
+    char *str;
 
-    if (root) {
-        /*
-         * Parse here
-         */
+    sddc_return_value_if_fail(root, SDDC_FALSE);
 
-        char *str = cJSON_Print(root);
+    /*
+     * Parse here
+     */
 
-        sddc_printf("esp_on_invite: %s\n", str);
+    str = cJSON_Print(root);
+    sddc_goto_error_if_fail(str);
 
-        cJSON_free(str);
+    sddc_printf("esp_on_invite: %s\n", str);
+    cJSON_free(str);
 
-        cJSON_Delete(root);
+    cJSON_Delete(root);
 
-        return SDDC_TRUE;
-    } else {
-        return SDDC_FALSE;
-    }
+    return SDDC_TRUE;
+
+error:
+    cJSON_Delete(root);
+
+    return SDDC_FALSE;
 }
 
 /*
@@ -150,20 +162,28 @@ static char *esp_report_data_create(void)
     char *str;
 
     root = cJSON_CreateObject();
-    cJSON_AddItemToObject(root, "report", report = cJSON_CreateObject());
-        cJSON_AddStringToObject(report, "name",   "IoT Pi");
-        cJSON_AddStringToObject(report, "type",   "device");
-        cJSON_AddBoolToObject(report,   "excl",   SDDC_FALSE);
-        cJSON_AddStringToObject(report, "desc",   "IoT Pi");
-        cJSON_AddStringToObject(report, "model",  "1");
-        cJSON_AddStringToObject(report, "vendor", "ACOINFO");
+    sddc_return_value_if_fail(root, NULL);
+
+    report = cJSON_CreateObject();
+    sddc_return_value_if_fail(report, NULL);
+
+    cJSON_AddItemToObject(root, "report", report);
+    cJSON_AddStringToObject(report, "name",   "IoT Pi");
+    cJSON_AddStringToObject(report, "type",   "device");
+    cJSON_AddBoolToObject(report,   "excl",   SDDC_FALSE);
+    cJSON_AddStringToObject(report, "desc",   "翼辉 IoT Pi");
+    cJSON_AddStringToObject(report, "model",  "1");
+    cJSON_AddStringToObject(report, "vendor", "ACOINFO");
 
     /*
      * Add extension here
      */
 
     str = cJSON_Print(root);
+    sddc_return_value_if_fail(str, NULL);
+
     sddc_printf("REPORT DATA: %s\n", str);
+
     cJSON_Delete(root);
 
     return str;
@@ -179,19 +199,26 @@ static char *esp_invite_data_create(void)
     char *str;
 
     root = cJSON_CreateObject();
-    cJSON_AddItemToObject(root, "report", report = cJSON_CreateObject());
-        cJSON_AddStringToObject(report, "name",   "IoT Pi");
-        cJSON_AddStringToObject(report, "type",   "device");
-        cJSON_AddBoolToObject(report,   "excl",   SDDC_FALSE);
-        cJSON_AddStringToObject(report, "desc",   "IoT Pi");
-        cJSON_AddStringToObject(report, "model",  "1");
-        cJSON_AddStringToObject(report, "vendor", "ACOINFO");
+    sddc_return_value_if_fail(root, NULL);
+
+    report = cJSON_CreateObject();
+    sddc_return_value_if_fail(report, NULL);
+
+    cJSON_AddItemToObject(root, "report", report);
+    cJSON_AddStringToObject(report, "name",   "IoT Pi");
+    cJSON_AddStringToObject(report, "type",   "device");
+    cJSON_AddBoolToObject(report,   "excl",   SDDC_FALSE);
+    cJSON_AddStringToObject(report, "desc",   "翼辉 IoT Pi");
+    cJSON_AddStringToObject(report, "model",  "1");
+    cJSON_AddStringToObject(report, "vendor", "ACOINFO");
 
     /*
      * Add extension here
      */
 
     str = cJSON_Print(root);
+    sddc_return_value_if_fail(str, NULL);
+
     sddc_printf("INVITE DATA: %s\n", str);
 
     cJSON_Delete(root);
@@ -261,46 +288,40 @@ static void initialise_wifi(void)
     ESP_ERROR_CHECK( esp_wifi_start() );
 }
 
-static void smartconfig_task(void * parm)
-{
-    EventBits_t uxBits;
-    ESP_ERROR_CHECK( esp_smartconfig_set_type(SC_TYPE_ESPTOUCH) );
-    smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_smartconfig_start(&cfg) );
-    while (1) {
-        uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY); 
-        if(uxBits & CONNECTED_BIT) {
-            ESP_LOGI(TAG, "Wi-Fi Connected to AP");
-        }
-        if(uxBits & ESPTOUCH_DONE_BIT) {
-            ESP_LOGI(TAG, "SmartConfig over");
-            esp_smartconfig_stop();
-            smartconfig_flag = 0;
-            vTaskDelete(NULL);
-        }
-    }
-}
-
 static void flash_key_task(void *arg)
 {
     int i = 0;
 
-    smartconfig_flag = 0;
     while (1) {
         vTaskDelay(1000 / portTICK_RATE_MS);
         if (!gpio_get_level(0)) {
             i++;
+            if (i > 3) {
+                i = 0;
+                sddc_printf("Start SmartConfig....\n");
+
+                initialise_wifi();
+
+                EventBits_t uxBits;
+                ESP_ERROR_CHECK( esp_smartconfig_set_type(SC_TYPE_ESPTOUCH) );
+
+                smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
+                ESP_ERROR_CHECK( esp_smartconfig_start(&cfg) );
+
+                while (1) {
+                    uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY); 
+                    if (uxBits & CONNECTED_BIT) {
+                        ESP_LOGI(TAG, "Wi-Fi Connected to AP");
+                    }
+                    if (uxBits & ESPTOUCH_DONE_BIT) {
+                        ESP_LOGI(TAG, "SmartConfig over");
+                        esp_smartconfig_stop();
+                        break;
+                    }
+                }
+            }
         } else {
             i = 0;
-        }
-        if (i > 3) {
-            i = 0;
-            sddc_printf("Start SmartConfig....\n");
-            if (!smartconfig_flag) {
-                initialise_wifi();
-                xTaskCreate(smartconfig_task, "smartconfig_task", 2048, NULL, 10, NULL);
-                smartconfig_flag = 1;
-            }
         }
     }
 }
@@ -382,6 +403,8 @@ static void sddc_example_task(void *arg)
      * Destroy SDDC
      */
     sddc_destroy(sddc);
+
+    vTaskDelete(NULL);
 }
 
 void app_main(void)
@@ -389,7 +412,6 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    xTaskCreate(flash_key_task, "flash_key_task", 4096, NULL, 5, NULL);
 
     /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
      * Read "Establishing Wi-Fi or Ethernet Connection" section in
@@ -397,5 +419,6 @@ void app_main(void)
      */
     ESP_ERROR_CHECK(example_connect());
 
+    xTaskCreate(flash_key_task,    "flash_key_task",    4096, NULL, 5, NULL);
     xTaskCreate(sddc_example_task, "sddc_example_task", 4096, NULL, 5, NULL);
 }
