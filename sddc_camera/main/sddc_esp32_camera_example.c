@@ -1,4 +1,4 @@
-/* SDDC Example
+/* SDDC Camera Example
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
 
@@ -33,6 +33,7 @@
 #include "cJSON.h"
 
 #include "driver/gpio.h"
+#include "camera.h"
 
 static EventGroupHandle_t wifi_event_group;
 static const int CONNECTED_BIT = BIT0;
@@ -47,23 +48,109 @@ static const char *TAG = "sddc";
 #define ESP_SDDC_TASK_STACK_SIZE      4096
 #define ESP_SDDC_TASK_PRIO            20
 
+#define ESP_CONNECTOR_TASK_STACK_SIZE 4096
+#define ESP_CONNECTOR_TASK_PRIO       20
+
+static camera_pixelformat_t s_pixel_format;
+
+static QueueHandle_t conn_mqueue_handle = NULL;
+
+#ifndef min
+#define min(a, b)  ((a) < (b) ? (a) : (b))
+#endif
+
+#define CAMERA_PIXEL_FORMAT CAMERA_PF_JPEG
+#define CAMERA_FRAME_SIZE   CAMERA_FS_SVGA
+
+/*
+ * sddc connector task
+ */
+static void esp_connector_task(void *arg)
+{
+    sddc_connector_t *conn;
+    BaseType_t ret;
+
+    while (1) {
+        ret = xQueueReceive(conn_mqueue_handle, &conn, portMAX_DELAY);
+        if (ret == pdTRUE) {
+            void *data = camera_get_fb();
+            size_t size = camera_get_data_size();
+            size_t totol_len = 0;
+            size_t len;
+
+            while (totol_len < size) {
+                len = min((size - totol_len), 1024);
+
+                ret = sddc_connector_put(conn, data, len, (totol_len + len) == size);
+                if (ret < 0) {
+                    sddc_printf("Failed to put!\n");
+                    break;
+                }
+                totol_len += len;
+                data += len;
+
+                sddc_printf("Put %d byte\n", len);
+            }
+
+            sddc_printf("Total put %d byte\n", totol_len);
+            sddc_connector_destroy(conn);
+        }
+    }
+}
+
 /*
  * handle MESSAGE
  */
 static sddc_bool_t esp_on_message(sddc_t *sddc, const uint8_t *uid, const char *message, size_t len)
 {
     cJSON *root = cJSON_Parse(message);
+    cJSON *cmd;
+    char *str;
+
     sddc_return_value_if_fail(root, SDDC_TRUE);
 
-    /*
-     * Parse here
-     */
-
-    char *str = cJSON_Print(root);
+    str = cJSON_Print(root);
     sddc_goto_error_if_fail(str);
 
     sddc_printf("esp_on_message: %s\n", str);
     cJSON_free(str);
+
+    /*
+     * Parse here
+     */
+    cmd = cJSON_GetObjectItem(root, "cmd");
+    if (cJSON_IsString(cmd)) {
+        sddc_bool_t get_mode;
+        int ret;
+
+        if (strcmp(cmd->valuestring, "recv") == 0) {
+            get_mode = SDDC_FALSE;
+        } else {
+            sddc_printf("Command no support!\n");
+            goto error;
+        }
+
+        cJSON *connector = cJSON_GetObjectItem(root, "connector");
+        sddc_goto_error_if_fail(cJSON_IsObject(connector));
+
+        cJSON *port = cJSON_GetObjectItem(connector, "port");
+        sddc_goto_error_if_fail(cJSON_IsNumber(port));
+
+        cJSON *token = cJSON_GetObjectItem(connector, "token");
+        sddc_goto_error_if_fail(!token || cJSON_IsString(token));
+
+        sddc_connector_t *conn = sddc_connector_create(sddc, uid, port->valuedouble, token ? token->valuestring : NULL, get_mode);
+        sddc_goto_error_if_fail(conn);
+
+        ret = xQueueSend(conn_mqueue_handle, &conn, 0);
+        if (ret != pdTRUE) {
+            sddc_connector_destroy(conn);
+            sddc_goto_error_if_fail(ret == pdTRUE);
+        }
+
+    } else {
+        sddc_printf("Command no specify!\n");
+    }
 
 error:
     cJSON_Delete(root);
@@ -176,10 +263,10 @@ static char *esp_report_data_create(void)
     sddc_return_value_if_fail(report, NULL);
 
     cJSON_AddItemToObject(root, "report", report);
-    cJSON_AddStringToObject(report, "name",   "IoT Pi");
+    cJSON_AddStringToObject(report, "name",   "IoT Camera");
     cJSON_AddStringToObject(report, "type",   "device");
     cJSON_AddBoolToObject(report,   "excl",   SDDC_FALSE);
-    cJSON_AddStringToObject(report, "desc",   "翼辉 IoT Pi");
+    cJSON_AddStringToObject(report, "desc",   "翼辉 IoT Camera");
     cJSON_AddStringToObject(report, "model",  "1");
     cJSON_AddStringToObject(report, "vendor", "ACOINFO");
 
@@ -213,10 +300,10 @@ static char *esp_invite_data_create(void)
     sddc_return_value_if_fail(report, NULL);
 
     cJSON_AddItemToObject(root, "report", report);
-    cJSON_AddStringToObject(report, "name",   "IoT Pi");
+    cJSON_AddStringToObject(report, "name",   "IoT Camera");
     cJSON_AddStringToObject(report, "type",   "device");
     cJSON_AddBoolToObject(report,   "excl",   SDDC_FALSE);
-    cJSON_AddStringToObject(report, "desc",   "翼辉 IoT Pi");
+    cJSON_AddStringToObject(report, "desc",   "翼辉 IoT Camera");
     cJSON_AddStringToObject(report, "model",  "1");
     cJSON_AddStringToObject(report, "vendor", "ACOINFO");
 
@@ -334,6 +421,34 @@ static void esp_flash_key_task(void *arg)
                 ESP_ERROR_CHECK( esp_event_handler_unregister(SC_EVENT, ESP_EVENT_ANY_ID, &event_handle) );
             }
         } else {
+            if (i > 0) {
+                cJSON *root = NULL;
+                char *str;
+                size_t size;
+                int ret;
+
+                ret = camera_run();
+                sddc_goto_error_if_fail(ret == ESP_OK);
+
+                size = camera_get_data_size();
+
+                root = cJSON_CreateObject();
+                sddc_goto_error_if_fail(root);
+
+                cJSON_AddStringToObject(root, "cmd", "recv");
+                cJSON_AddNumberToObject(root, "size", size);
+
+                sddc_printf("Send picture to EdgerOS, file size %d\n", size);
+
+                str = cJSON_Print(root);
+                sddc_goto_error_if_fail(str);
+
+                sddc_broadcast_message(sddc, str, strlen(str), 1, SDDC_FALSE, NULL);
+                cJSON_free(str);
+
+error:
+                cJSON_Delete(root);
+            }
             i = 0;
         }
     }
@@ -408,6 +523,11 @@ static void esp_sddc_task(void *arg)
 
     xTaskCreate(esp_flash_key_task, "flash_key_task",  ESP_KEY_TASK_STACK_SIZE, sddc, ESP_KEY_TASK_PRIO, NULL);
 
+    conn_mqueue_handle = xQueueCreate(4, sizeof(sddc_connector_t *));
+    
+    xTaskCreate(esp_connector_task, "connector_task1", ESP_CONNECTOR_TASK_STACK_SIZE, sddc, ESP_CONNECTOR_TASK_PRIO, NULL);
+    xTaskCreate(esp_connector_task, "connector_task2", ESP_CONNECTOR_TASK_STACK_SIZE, sddc, ESP_CONNECTOR_TASK_PRIO, NULL);
+    
     /*
      * SDDC run
      */
@@ -438,6 +558,58 @@ void app_main(void)
      * examples/protocols/README.md for more information about this function.
      */
     ESP_ERROR_CHECK(example_connect());
+
+    camera_config_t camera_config = {
+        .ledc_channel = LEDC_CHANNEL_0,
+        .ledc_timer = LEDC_TIMER_0,
+        .pin_d0 = CONFIG_D0,
+        .pin_d1 = CONFIG_D1,
+        .pin_d2 = CONFIG_D2,
+        .pin_d3 = CONFIG_D3,
+        .pin_d4 = CONFIG_D4,
+        .pin_d5 = CONFIG_D5,
+        .pin_d6 = CONFIG_D6,
+        .pin_d7 = CONFIG_D7,
+        .pin_xclk = CONFIG_XCLK,
+        .pin_pclk = CONFIG_PCLK,
+        .pin_vsync = CONFIG_VSYNC,
+        .pin_href = CONFIG_HREF,
+        .pin_sscb_sda = CONFIG_SDA,
+        .pin_sscb_scl = CONFIG_SCL,
+        .pin_reset = CONFIG_RESET,
+        .xclk_freq_hz = CONFIG_XCLK_FREQ,
+    };
+
+    camera_model_t camera_model;
+    esp_err_t err = camera_probe(&camera_config, &camera_model);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Camera probe failed with error 0x%x", err);
+        return;
+    }
+
+    if (camera_model == CAMERA_OV7725) {
+        s_pixel_format = CAMERA_PIXEL_FORMAT;
+        camera_config.frame_size = CAMERA_FRAME_SIZE;
+        ESP_LOGI(TAG, "Detected OV7725 camera, using %s bitmap format",
+                CAMERA_PIXEL_FORMAT == CAMERA_PF_GRAYSCALE ?
+                        "grayscale" : "RGB565");
+    } else if (camera_model == CAMERA_OV2640) {
+        ESP_LOGI(TAG, "Detected OV2640 camera, using JPEG format");
+        s_pixel_format = CAMERA_PIXEL_FORMAT;
+        camera_config.frame_size = CAMERA_FRAME_SIZE;
+        if (s_pixel_format == CAMERA_PF_JPEG)
+        camera_config.jpeg_quality = 15;
+    } else {
+        ESP_LOGE(TAG, "Camera not supported");
+        return;
+    }
+
+    camera_config.pixel_format = s_pixel_format;
+    err = camera_init(&camera_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
+        return;
+    }
 
     xTaskCreate(esp_sddc_task, "sddc_task", ESP_SDDC_TASK_STACK_SIZE, NULL, ESP_SDDC_TASK_PRIO, NULL);
 }

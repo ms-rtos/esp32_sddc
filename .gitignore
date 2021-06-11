@@ -52,3 +52,5 @@ Mkfile.old
 dkms.conf
 /sddc_camera/build
 /sddc_template/build
+/sddc_camera/.vscode
+/sddc_template/.vscode
