@@ -42,10 +42,10 @@ static const char *TAG = "sddc";
 #define GPIO_INPUT_IO_SMARTCOFNIG     12 
 
 #define ESP_KEY_TASK_STACK_SIZE       4096
-#define ESP_KEY_TASK_PRIO             20
+#define ESP_KEY_TASK_PRIO             25
 
 #define ESP_SDDC_TASK_STACK_SIZE      4096
-#define ESP_SDDC_TASK_PRIO            20
+#define ESP_SDDC_TASK_PRIO            10
 
 /*
  * handle MESSAGE

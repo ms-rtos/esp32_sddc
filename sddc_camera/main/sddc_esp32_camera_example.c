@@ -43,10 +43,10 @@ static const char *TAG = "sddc";
 #define GPIO_INPUT_IO_SMARTCOFNIG     12 
 
 #define ESP_KEY_TASK_STACK_SIZE       4096
-#define ESP_KEY_TASK_PRIO             20
+#define ESP_KEY_TASK_PRIO             25
 
 #define ESP_SDDC_TASK_STACK_SIZE      4096
-#define ESP_SDDC_TASK_PRIO            20
+#define ESP_SDDC_TASK_PRIO            10
 
 #define ESP_CONNECTOR_TASK_STACK_SIZE 4096
 #define ESP_CONNECTOR_TASK_PRIO       20
@@ -62,6 +62,81 @@ static QueueHandle_t conn_mqueue_handle = NULL;
 #define CAMERA_PIXEL_FORMAT CAMERA_PF_JPEG
 #define CAMERA_FRAME_SIZE   CAMERA_FS_SVGA
 
+static struct timeval last_capture_time;
+
+/*
+ * Get picture from connector
+ */
+static void esp_get_pic(sddc_connector_t *conn)
+{
+    sddc_bool_t finish;
+    void *data;
+    ssize_t ret;
+    size_t totol_len = 0;
+
+    while (1) {
+        ret = sddc_connector_get(conn, &data, &finish);
+        if (ret < 0) {
+            sddc_printf("Failed to get!\n");
+            break;
+        } else {
+            sddc_printf("Get %d byte\n", ret);
+            totol_len += ret;
+            if (finish) {
+                break;
+            }
+        }
+    }
+
+    sddc_printf("Total get %d byte\n", totol_len);
+
+    sddc_connector_destroy(conn);
+}
+
+/*
+ * Put picture to connector
+ */
+static void esp_put_pic(sddc_connector_t *conn)
+{
+    void *data;
+    size_t size;
+    size_t totol_len = 0;
+    size_t len;
+    int ret;
+    struct timeval cur_time;
+    struct timeval diff_time;
+    long diff_msec;
+
+    gettimeofday(&cur_time, NULL);
+
+    timersub(&cur_time, &last_capture_time, &diff_time);
+    diff_msec = (diff_time.tv_sec * 1000) + (diff_time.tv_usec / 1000);
+    if (diff_msec >= 500) {
+        camera_run();
+        last_capture_time = cur_time;
+    }
+
+    data = camera_get_fb();
+    size = camera_get_data_size();
+
+    while (totol_len < size) {
+        len = min((size - totol_len), 1024);
+
+        ret = sddc_connector_put(conn, data, len, (totol_len + len) == size);
+        if (ret < 0) {
+            sddc_printf("Failed to put!\n");
+            break;
+        }
+        totol_len += len;
+        data += len;
+
+        sddc_printf("Put %d byte\n", len);
+    }
+
+    sddc_printf("Total put %d byte\n", totol_len);
+    sddc_connector_destroy(conn);
+}
+
 /*
  * sddc connector task
  */
@@ -73,27 +148,11 @@ static void esp_connector_task(void *arg)
     while (1) {
         ret = xQueueReceive(conn_mqueue_handle, &conn, portMAX_DELAY);
         if (ret == pdTRUE) {
-            void *data = camera_get_fb();
-            size_t size = camera_get_data_size();
-            size_t totol_len = 0;
-            size_t len;
-
-            while (totol_len < size) {
-                len = min((size - totol_len), 1024);
-
-                ret = sddc_connector_put(conn, data, len, (totol_len + len) == size);
-                if (ret < 0) {
-                    sddc_printf("Failed to put!\n");
-                    break;
-                }
-                totol_len += len;
-                data += len;
-
-                sddc_printf("Put %d byte\n", len);
+            if (sddc_connector_mode(conn) == 1) {
+                esp_get_pic(conn);
+            } else {
+                esp_put_pic(conn);
             }
-
-            sddc_printf("Total put %d byte\n", totol_len);
-            sddc_connector_destroy(conn);
         }
     }
 }
@@ -125,6 +184,13 @@ static sddc_bool_t esp_on_message(sddc_t *sddc, const uint8_t *uid, const char *
 
         if (strcmp(cmd->valuestring, "recv") == 0) {
             get_mode = SDDC_FALSE;
+        } else if (strcmp(cmd->valuestring, "send") == 0) {
+            get_mode = SDDC_TRUE;
+
+            cJSON *size = cJSON_GetObjectItem(root, "size");
+            if (size && cJSON_IsNumber(size)) {
+                sddc_printf("EdgerOS send picture to me, file size %d\n", (int)size->valuedouble);
+            }
         } else {
             sddc_printf("Command no support!\n");
             goto error;
@@ -430,6 +496,8 @@ static void esp_flash_key_task(void *arg)
                 ret = camera_run();
                 sddc_goto_error_if_fail(ret == ESP_OK);
 
+                gettimeofday(&last_capture_time, NULL);
+                
                 size = camera_get_data_size();
 
                 root = cJSON_CreateObject();
@@ -526,7 +594,6 @@ static void esp_sddc_task(void *arg)
     conn_mqueue_handle = xQueueCreate(4, sizeof(sddc_connector_t *));
     
     xTaskCreate(esp_connector_task, "connector_task1", ESP_CONNECTOR_TASK_STACK_SIZE, sddc, ESP_CONNECTOR_TASK_PRIO, NULL);
-    xTaskCreate(esp_connector_task, "connector_task2", ESP_CONNECTOR_TASK_STACK_SIZE, sddc, ESP_CONNECTOR_TASK_PRIO, NULL);
     
     /*
      * SDDC run
@@ -581,7 +648,11 @@ void app_main(void)
     };
 
     camera_model_t camera_model;
-    esp_err_t err = camera_probe(&camera_config, &camera_model);
+    esp_err_t err;
+    uint32_t start_code;
+
+__init_camera:
+    err = camera_probe(&camera_config, &camera_model);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera probe failed with error 0x%x", err);
         return;
@@ -610,6 +681,22 @@ void app_main(void)
         ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
         return;
     }
+
+    err = camera_run();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Camera run failed with error 0x%x", err);
+        camera_deinit();
+        goto __init_camera;
+    }
+
+    start_code = *(uint32_t *)camera_get_fb();
+    if (start_code != 0xe0ffd8ff) {
+        ESP_LOGE(TAG, "Camera data start code error 0x%x", start_code);
+        camera_deinit();
+        goto __init_camera;
+    }
+
+    gettimeofday(&last_capture_time, NULL);
 
     xTaskCreate(esp_sddc_task, "sddc_task", ESP_SDDC_TASK_STACK_SIZE, NULL, ESP_SDDC_TASK_PRIO, NULL);
 }
