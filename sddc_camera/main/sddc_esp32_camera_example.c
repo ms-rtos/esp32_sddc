@@ -55,6 +55,8 @@ static camera_pixelformat_t s_pixel_format;
 
 static QueueHandle_t conn_mqueue_handle = NULL;
 
+static TimerHandle_t lock_timer_handle = NULL;
+
 #ifndef min
 #define min(a, b)  ((a) < (b) ? (a) : (b))
 #endif
@@ -65,38 +67,9 @@ static QueueHandle_t conn_mqueue_handle = NULL;
 static struct timeval last_capture_time;
 
 /*
- * Get picture from connector
+ * Send image to connector
  */
-static void esp_get_pic(sddc_connector_t *conn)
-{
-    sddc_bool_t finish;
-    void *data;
-    ssize_t ret;
-    size_t totol_len = 0;
-
-    while (1) {
-        ret = sddc_connector_get(conn, &data, &finish);
-        if (ret < 0) {
-            sddc_printf("Failed to get!\n");
-            break;
-        } else {
-            sddc_printf("Get %d byte\n", ret);
-            totol_len += ret;
-            if (finish) {
-                break;
-            }
-        }
-    }
-
-    sddc_printf("Total get %d byte\n", totol_len);
-
-    sddc_connector_destroy(conn);
-}
-
-/*
- * Put picture to connector
- */
-static void esp_put_pic(sddc_connector_t *conn)
+static void esp_send_image(sddc_connector_t *conn)
 {
     void *data;
     size_t size;
@@ -120,7 +93,7 @@ static void esp_put_pic(sddc_connector_t *conn)
     size = camera_get_data_size();
 
     while (totol_len < size) {
-        len = min((size - totol_len), 1024);
+        len = min((size - totol_len), (1460 - 16));
 
         ret = sddc_connector_put(conn, data, len, (totol_len + len) == size);
         if (ret < 0) {
@@ -134,7 +107,6 @@ static void esp_put_pic(sddc_connector_t *conn)
     }
 
     sddc_printf("Total put %d byte\n", totol_len);
-    sddc_connector_destroy(conn);
 }
 
 /*
@@ -148,17 +120,22 @@ static void esp_connector_task(void *arg)
     while (1) {
         ret = xQueueReceive(conn_mqueue_handle, &conn, portMAX_DELAY);
         if (ret == pdTRUE) {
-            if (sddc_connector_mode(conn) == 1) {
-                esp_get_pic(conn);
-            } else {
-                esp_put_pic(conn);
-            }
+            esp_send_image(conn);
+            sddc_connector_destroy(conn);
         }
     }
 }
 
 /*
- * handle MESSAGE
+ * Lock timer callback function
+ */
+static void esp_lock_timer_callback(TimerHandle_t handle)
+{
+    sddc_printf("Close the door!\n");
+}
+
+/*
+ * Handle MESSAGE
  */
 static sddc_bool_t esp_on_message(sddc_t *sddc, const uint8_t *uid, const char *message, size_t len)
 {
@@ -174,23 +151,28 @@ static sddc_bool_t esp_on_message(sddc_t *sddc, const uint8_t *uid, const char *
     sddc_printf("esp_on_message: %s\n", str);
     cJSON_free(str);
 
-    /*
-     * Parse here
-     */
     cmd = cJSON_GetObjectItem(root, "cmd");
     if (cJSON_IsString(cmd)) {
-        sddc_bool_t get_mode;
-        int ret;
-
         if (strcmp(cmd->valuestring, "recv") == 0) {
-            get_mode = SDDC_FALSE;
-        } else if (strcmp(cmd->valuestring, "send") == 0) {
-            get_mode = SDDC_TRUE;
 
-            cJSON *size = cJSON_GetObjectItem(root, "size");
-            if (size && cJSON_IsNumber(size)) {
-                sddc_printf("EdgerOS send picture to me, file size %d\n", (int)size->valuedouble);
+        } else if (strcmp(cmd->valuestring, "unlock") == 0) {
+            cJSON *timeout = cJSON_GetObjectItem(root, "timeout");
+            uint32_t timeout_ms;
+
+            if (timeout && cJSON_IsNumber(timeout)) {
+                timeout_ms = timeout->valuedouble;
+                if (timeout_ms < 2000) {
+                    timeout_ms = 2000;
+                }
+            } else {
+                timeout_ms = 5000;
             }
+
+            xTimerChangePeriod(lock_timer_handle, timeout_ms / portTICK_RATE_MS, 1);
+            xTimerStart(lock_timer_handle, 0);
+
+            sddc_printf("Open the door, timeout %dms!\n", timeout_ms);
+            goto done;
         } else {
             sddc_printf("Command no support!\n");
             goto error;
@@ -205,19 +187,19 @@ static sddc_bool_t esp_on_message(sddc_t *sddc, const uint8_t *uid, const char *
         cJSON *token = cJSON_GetObjectItem(connector, "token");
         sddc_goto_error_if_fail(!token || cJSON_IsString(token));
 
-        sddc_connector_t *conn = sddc_connector_create(sddc, uid, port->valuedouble, token ? token->valuestring : NULL, get_mode);
+        sddc_connector_t *conn = sddc_connector_create(sddc, uid, port->valuedouble, token ? token->valuestring : NULL, SDDC_FALSE);
         sddc_goto_error_if_fail(conn);
 
-        ret = xQueueSend(conn_mqueue_handle, &conn, 0);
+        int ret = xQueueSend(conn_mqueue_handle, &conn, 0);
         if (ret != pdTRUE) {
             sddc_connector_destroy(conn);
             sddc_goto_error_if_fail(ret == pdTRUE);
         }
-
     } else {
         sddc_printf("Command no specify!\n");
     }
 
+done:
 error:
     cJSON_Delete(root);
 
@@ -225,28 +207,28 @@ error:
 }
 
 /*
- * handle MESSAGE ACK
+ * Handle MESSAGE ACK
  */
 static void esp_on_message_ack(sddc_t *sddc, const uint8_t *uid, uint16_t seqno)
 {
 }
 
 /*
- * handle MESSAGE lost
+ * Handle MESSAGE lost
  */
 static void esp_on_message_lost(sddc_t *sddc, const uint8_t *uid, uint16_t seqno)
 {
 }
 
 /*
- * handle EdgerOS lost
+ * Handle EdgerOS lost
  */
 static void esp_on_edgeros_lost(sddc_t *sddc, const uint8_t *uid)
 {
 }
 
 /*
- * handle UPDATE
+ * Handle UPDATE
  */
 static sddc_bool_t esp_on_update(sddc_t *sddc, const uint8_t *uid, const char *udpate_data, size_t len)
 {
@@ -276,7 +258,7 @@ error:
 }
 
 /*
- * handle INVITE
+ * Handle INVITE
  */
 static sddc_bool_t esp_on_invite(sddc_t *sddc, const uint8_t *uid, const char *invite_data, size_t len)
 {
@@ -306,7 +288,7 @@ error:
 }
 
 /*
- * handle the end of INVITE
+ * Handle the end of INVITE
  */
 static sddc_bool_t esp_on_invite_end(sddc_t *sddc, const uint8_t *uid)
 {
@@ -431,9 +413,9 @@ static void event_handle(void* arg, esp_event_base_t event_base,
 }
 
 /*
- * flash key task
+ * key task
  */
-static void esp_flash_key_task(void *arg)
+static void esp_key_task(void *arg)
 {
     sddc_t *sddc = arg;
     gpio_config_t io_conf;
@@ -589,12 +571,18 @@ static void esp_sddc_task(void *arg)
 
     wifi_event_group = xEventGroupCreate();
 
-    xTaskCreate(esp_flash_key_task, "flash_key_task",  ESP_KEY_TASK_STACK_SIZE, sddc, ESP_KEY_TASK_PRIO, NULL);
+    xTaskCreate(esp_key_task, "key_task",  ESP_KEY_TASK_STACK_SIZE, sddc, ESP_KEY_TASK_PRIO, NULL);
 
     conn_mqueue_handle = xQueueCreate(4, sizeof(sddc_connector_t *));
     
     xTaskCreate(esp_connector_task, "connector_task1", ESP_CONNECTOR_TASK_STACK_SIZE, sddc, ESP_CONNECTOR_TASK_PRIO, NULL);
-    
+
+    lock_timer_handle = xTimerCreate("lock_timer",
+                                     2000 / portTICK_RATE_MS,
+                                     pdFALSE,
+                                     0,
+                                     esp_lock_timer_callback);
+
     /*
      * SDDC run
      */

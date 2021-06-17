@@ -48,7 +48,7 @@ static const char *TAG = "sddc";
 #define ESP_SDDC_TASK_PRIO            10
 
 /*
- * handle MESSAGE
+ * Handle MESSAGE
  */
 static sddc_bool_t esp_on_message(sddc_t *sddc, const uint8_t *uid, const char *message, size_t len)
 {
@@ -72,28 +72,28 @@ error:
 }
 
 /*
- * handle MESSAGE ACK
+ * Handle MESSAGE ACK
  */
 static void esp_on_message_ack(sddc_t *sddc, const uint8_t *uid, uint16_t seqno)
 {
 }
 
 /*
- * handle MESSAGE lost
+ * Handle MESSAGE lost
  */
 static void esp_on_message_lost(sddc_t *sddc, const uint8_t *uid, uint16_t seqno)
 {
 }
 
 /*
- * handle EdgerOS lost
+ * Handle EdgerOS lost
  */
 static void esp_on_edgeros_lost(sddc_t *sddc, const uint8_t *uid)
 {
 }
 
 /*
- * handle UPDATE
+ * Handle UPDATE
  */
 static sddc_bool_t esp_on_update(sddc_t *sddc, const uint8_t *uid, const char *udpate_data, size_t len)
 {
@@ -123,7 +123,7 @@ error:
 }
 
 /*
- * handle INVITE
+ * Handle INVITE
  */
 static sddc_bool_t esp_on_invite(sddc_t *sddc, const uint8_t *uid, const char *invite_data, size_t len)
 {
@@ -153,7 +153,7 @@ error:
 }
 
 /*
- * handle the end of INVITE
+ * Handle the end of INVITE
  */
 static sddc_bool_t esp_on_invite_end(sddc_t *sddc, const uint8_t *uid)
 {
@@ -278,9 +278,9 @@ static void event_handle(void* arg, esp_event_base_t event_base,
 }
 
 /*
- * flash key task
+ * key task
  */
-static void esp_flash_key_task(void *arg)
+static void esp_key_task(void *arg)
 {
     sddc_t *sddc = arg;
     gpio_config_t io_conf;
@@ -406,7 +406,7 @@ static void esp_sddc_task(void *arg)
 
     wifi_event_group = xEventGroupCreate();
 
-    xTaskCreate(esp_flash_key_task, "flash_key_task",  ESP_KEY_TASK_STACK_SIZE, sddc, ESP_KEY_TASK_PRIO, NULL);
+    xTaskCreate(esp_key_task, "key_task",  ESP_KEY_TASK_STACK_SIZE, sddc, ESP_KEY_TASK_PRIO, NULL);
 
     /*
      * SDDC run
