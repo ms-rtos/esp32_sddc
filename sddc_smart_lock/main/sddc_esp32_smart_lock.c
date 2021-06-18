@@ -1,4 +1,4 @@
-/* SDDC Camera Example
+/* SDDC Smart Lock Demo
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
 
@@ -13,14 +13,11 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
-#include "esp_wpa2.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_system.h"
-#include "nvs_flash.h"
 #include "esp_netif.h"
-#include "esp_smartconfig.h"
-#include "protocol_examples_common.h"
+#include "esp32_connect.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -35,10 +32,7 @@
 #include "driver/gpio.h"
 #include "camera.h"
 
-static EventGroupHandle_t wifi_event_group;
-static const int CONNECTED_BIT = BIT0;
-static const int ESPTOUCH_DONE_BIT = BIT1;
-static const char *TAG = "sddc";
+static const char *TAG = "smart_lock";
 
 #define GPIO_INPUT_IO_SMARTCOFNIG     12 
 
@@ -53,9 +47,9 @@ static const char *TAG = "sddc";
 
 static camera_pixelformat_t s_pixel_format;
 
-static QueueHandle_t conn_mqueue_handle = NULL;
+static QueueHandle_t conn_mqueue_handle;
 
-static TimerHandle_t lock_timer_handle = NULL;
+static TimerHandle_t lock_timer_handle;
 
 #ifndef min
 #define min(a, b)  ((a) < (b) ? (a) : (b))
@@ -124,6 +118,8 @@ static void esp_connector_task(void *arg)
             sddc_connector_destroy(conn);
         }
     }
+
+    vTaskDelete(NULL);
 }
 
 /*
@@ -369,66 +365,13 @@ static char *esp_invite_data_create(void)
     return str;
 }
 
-static void event_handle(void* arg, esp_event_base_t event_base, 
-                         int32_t event_id, void* event_data)
-{
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        esp_wifi_connect();
-        xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
-    } else if (event_base == SC_EVENT && event_id == SC_EVENT_SCAN_DONE) {
-        ESP_LOGI(TAG, "Scan done");
-    } else if (event_base == SC_EVENT && event_id == SC_EVENT_FOUND_CHANNEL) {
-        ESP_LOGI(TAG, "Found channel");
-    } else if (event_base == SC_EVENT && event_id == SC_EVENT_GOT_SSID_PSWD) {
-        ESP_LOGI(TAG, "Got SSID and password");
-
-        smartconfig_event_got_ssid_pswd_t *evt = (smartconfig_event_got_ssid_pswd_t *)event_data;
-        wifi_config_t wifi_config;
-        uint8_t ssid[33] = { 0 };
-        uint8_t password[65] = { 0 };
-
-        bzero(&wifi_config, sizeof(wifi_config_t));
-        memcpy(wifi_config.sta.ssid, evt->ssid, sizeof(wifi_config.sta.ssid));
-        memcpy(wifi_config.sta.password, evt->password, sizeof(wifi_config.sta.password));
-        wifi_config.sta.bssid_set = evt->bssid_set;
-        if (wifi_config.sta.bssid_set == true) {
-            memcpy(wifi_config.sta.bssid, evt->bssid, sizeof(wifi_config.sta.bssid));
-        }
-
-        memcpy(ssid, evt->ssid, sizeof(evt->ssid));
-        memcpy(password, evt->password, sizeof(evt->password));
-        ESP_LOGI(TAG, "SSID:%s", ssid);
-        ESP_LOGI(TAG, "PASSWORD:%s", password);
-
-        ESP_ERROR_CHECK( esp_wifi_disconnect() );
-        ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-        esp_wifi_connect();
-    } else if (event_base == SC_EVENT && event_id == SC_EVENT_SEND_ACK_DONE) {
-        xEventGroupSetBits(wifi_event_group, ESPTOUCH_DONE_BIT);
-    }
-}
-
 /*
  * key task
  */
 static void esp_key_task(void *arg)
 {
     sddc_t *sddc = arg;
-    gpio_config_t io_conf;
     int i = 0;
-    
-    (void)sddc;
-
-    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = 1ULL << GPIO_INPUT_IO_SMARTCOFNIG;
-    io_conf.pull_down_en = 0;
-    io_conf.pull_up_en = 1;
-    gpio_config(&io_conf);
 
     while (1) {
         vTaskDelay(50 / portTICK_RATE_MS);
@@ -437,36 +380,8 @@ static void esp_key_task(void *arg)
             i++;
             if (i > (3 * 20)) {
                 i = 0;
-
                 sddc_printf("Start SmartConfig....\n");
-
-                esp_wifi_disconnect();
-                xEventGroupClearBits(wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT);
-
-                ESP_ERROR_CHECK( esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handle, NULL) );
-                ESP_ERROR_CHECK( esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handle, NULL) );
-                ESP_ERROR_CHECK( esp_event_handler_register(SC_EVENT, ESP_EVENT_ANY_ID, &event_handle, NULL) );
-
-                ESP_ERROR_CHECK( esp_smartconfig_set_type(SC_TYPE_ESPTOUCH) );
-
-                smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
-                ESP_ERROR_CHECK( esp_smartconfig_start(&cfg) );
-
-                while (1) {
-                    EventBits_t uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY); 
-                    if (uxBits & CONNECTED_BIT) {
-                        ESP_LOGI(TAG, "Wi-Fi Connected to AP");
-                    }
-                    if (uxBits & ESPTOUCH_DONE_BIT) {
-                        ESP_LOGI(TAG, "SmartConfig over");
-                        esp_smartconfig_stop();
-                        break;
-                    }
-                }
-
-                ESP_ERROR_CHECK( esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handle) );
-                ESP_ERROR_CHECK( esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handle) );
-                ESP_ERROR_CHECK( esp_event_handler_unregister(SC_EVENT, ESP_EVENT_ANY_ID, &event_handle) );
+                example_smart_config();
             }
         } else {
             if (i > 0) {
@@ -502,6 +417,8 @@ error:
             i = 0;
         }
     }
+
+    vTaskDelete(NULL);
 }
 
 /*
@@ -509,16 +426,11 @@ error:
  */
 static void esp_sddc_task(void *arg)
 {
-    sddc_t *sddc;
+    sddc_t *sddc = arg;
     char *data;
     uint8_t mac[6];
     char ip[sizeof("255.255.255.255")];
     tcpip_adapter_ip_info_t ip_info = { 0 };
-
-    /*
-     * Create SDDC
-     */
-    sddc = sddc_create(SDDC_CFG_PORT);
 
     /*
      * Set call backs
@@ -569,20 +481,6 @@ static void esp_sddc_task(void *arg)
 
     sddc_printf("IP addr: %s\n", ip);
 
-    wifi_event_group = xEventGroupCreate();
-
-    xTaskCreate(esp_key_task, "key_task",  ESP_KEY_TASK_STACK_SIZE, sddc, ESP_KEY_TASK_PRIO, NULL);
-
-    conn_mqueue_handle = xQueueCreate(4, sizeof(sddc_connector_t *));
-    
-    xTaskCreate(esp_connector_task, "connector_task1", ESP_CONNECTOR_TASK_STACK_SIZE, sddc, ESP_CONNECTOR_TASK_PRIO, NULL);
-
-    lock_timer_handle = xTimerCreate("lock_timer",
-                                     2000 / portTICK_RATE_MS,
-                                     pdFALSE,
-                                     0,
-                                     esp_lock_timer_callback);
-
     /*
      * SDDC run
      */
@@ -602,19 +500,12 @@ static void esp_sddc_task(void *arg)
     vTaskDelete(NULL);
 }
 
-void app_main(void)
+/*
+ * Init camera
+ */
+static esp_err_t esp_cam_init(void)
 {
-    ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
-     * Read "Establishing Wi-Fi or Ethernet Connection" section in
-     * examples/protocols/README.md for more information about this function.
-     */
-    ESP_ERROR_CHECK(example_connect());
-
-    camera_config_t camera_config = {
+   camera_config_t camera_config = {
         .ledc_channel = LEDC_CHANNEL_0,
         .ledc_timer = LEDC_TIMER_0,
         .pin_d0 = CONFIG_D0,
@@ -643,7 +534,7 @@ __init_camera:
     err = camera_probe(&camera_config, &camera_model);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera probe failed with error 0x%x", err);
-        return;
+        return ESP_FAIL;
     }
 
     if (camera_model == CAMERA_OV7725) {
@@ -657,17 +548,17 @@ __init_camera:
         s_pixel_format = CAMERA_PIXEL_FORMAT;
         camera_config.frame_size = CAMERA_FRAME_SIZE;
         if (s_pixel_format == CAMERA_PF_JPEG)
-        camera_config.jpeg_quality = 15;
+            camera_config.jpeg_quality = 15;
     } else {
         ESP_LOGE(TAG, "Camera not supported");
-        return;
+        return ESP_FAIL;
     }
 
     camera_config.pixel_format = s_pixel_format;
     err = camera_init(&camera_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
-        return;
+        return ESP_FAIL;
     }
 
     err = camera_run();
@@ -686,5 +577,54 @@ __init_camera:
 
     gettimeofday(&last_capture_time, NULL);
 
-    xTaskCreate(esp_sddc_task, "sddc_task", ESP_SDDC_TASK_STACK_SIZE, NULL, ESP_SDDC_TASK_PRIO, NULL);
+    return ESP_OK;
+}
+
+/*
+ * Init gpio
+ */
+static esp_err_t esp_gpio_init(void)
+{
+    gpio_config_t io_conf;
+
+    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = 1ULL << GPIO_INPUT_IO_SMARTCOFNIG;
+    io_conf.pull_down_en = 0;
+    io_conf.pull_up_en = 1;
+    gpio_config(&io_conf);
+
+    return ESP_OK;
+}
+
+void app_main(void)
+{
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
+     * Read "Establishing Wi-Fi or Ethernet Connection" section in
+     * examples/protocols/README.md for more information about this function.
+     */
+    ESP_ERROR_CHECK(example_connect());
+
+    ESP_ERROR_CHECK(esp_gpio_init());
+    ESP_ERROR_CHECK(esp_cam_init());
+
+    conn_mqueue_handle = xQueueCreate(4, sizeof(sddc_connector_t *));
+
+    lock_timer_handle  = xTimerCreate("lock_timer",
+                                      2000 / portTICK_RATE_MS,
+                                      pdFALSE,
+                                      0,
+                                      esp_lock_timer_callback);
+    /*
+     * Create SDDC
+     */
+    sddc_t *sddc = sddc_create(SDDC_CFG_PORT);
+
+    xTaskCreate(esp_sddc_task, "sddc_task", ESP_SDDC_TASK_STACK_SIZE, sddc, ESP_SDDC_TASK_PRIO, NULL);
+    xTaskCreate(esp_key_task, "key_task", ESP_KEY_TASK_STACK_SIZE, sddc, ESP_KEY_TASK_PRIO, NULL);
+    xTaskCreate(esp_connector_task, "connector_task1", ESP_CONNECTOR_TASK_STACK_SIZE, sddc, ESP_CONNECTOR_TASK_PRIO, NULL);
 }

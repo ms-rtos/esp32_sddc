@@ -121,10 +121,10 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
-# SDDC Camera Demo Configuration
+# SDDC Smart Lock Demo Configuration
 #
 CONFIG_XCLK_FREQ=20000000
-# end of SDDC Camera Demo Configuration
+# end of SDDC Smart Lock Demo Configuration
 
 #
 # Camera configuration

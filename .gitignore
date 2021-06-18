@@ -50,7 +50,7 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
-/sddc_camera/build
+/sddc_smart_lock/build
 /sddc_template/build
-/sddc_camera/.vscode
+/sddc_smart_lock/.vscode
 /sddc_template/.vscode

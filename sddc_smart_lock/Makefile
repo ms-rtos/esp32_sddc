@@ -3,9 +3,7 @@
 # project subdirectory.
 #
 
-PROJECT_NAME := sddc_camera
-
-EXTRA_COMPONENT_DIRS = $(IDF_PATH)/examples/common_components/protocol_examples_common
+PROJECT_NAME := sddc_smart_lock
 
 include $(IDF_PATH)/make/project.mk
 

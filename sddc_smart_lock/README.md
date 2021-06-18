@@ -1,7 +1,7 @@
 
-# ESP32 SDDC Camera example
+# ESP32 SDDC Smart Lock Demo
 
-EdgerOS SDDC Camera example for ESP32.
+EdgerOS SDDC Smart Lock Demo for ESP32.
 
 ## Hardware Required
 
