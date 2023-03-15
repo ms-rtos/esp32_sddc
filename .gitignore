@@ -55,3 +55,4 @@ dkms.conf
 /sddc_smart_lock/.vscode
 /sddc_template/.vscode
 /sddc_smart_lock/main/.vscode
+/.metadata
